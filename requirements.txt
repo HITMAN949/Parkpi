@@ -1,0 +1,21 @@
+# ParkPi — full requirements
+# Run: pip install -r requirements.txt --break-system-packages
+
+# Web framework
+flask>=3.0
+flask-sock>=0.7
+
+# Plate recognition
+opencv-python-headless>=4.9   # use opencv-python if you need GUI windows
+pytesseract>=0.3.10
+numpy>=1.24
+
+# Pi Camera (only on hardware)
+# picamera2>=0.3.19            # uncomment on Raspberry Pi
+
+# GPIO (only on hardware)
+# RPi.GPIO>=0.7.1              # uncomment on Raspberry Pi
+
+# ── System dependencies (install via apt) ─────────────────
+# sudo apt update
+# sudo apt install -y tesseract-ocr tesseract-ocr-eng libgl1

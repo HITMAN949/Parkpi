@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ParkPi — Smart Parking</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0d0f12;
+    --surface:  #141720;
+    --border:   #1f2430;
+    --border2:  #2c3347;
+    --text:     #e2e6f0;
+    --muted:    #6b7490;
+    --accent:   #3b8bff;
+    --free:     #22c97a;
+    --occupied: #ff4f4f;
+    --reserved: #f0a020;
+    --font:     'Syne', sans-serif;
+    --mono:     'DM Mono', monospace;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); }
+
+  /* ── Layout ── */
+  .shell { display: grid; grid-template-rows: 56px 1fr; height: 100vh; overflow: hidden; }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 24px; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .topbar-logo { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--free); animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .topbar-meta { display: flex; align-items: center; gap: 16px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .tag { background: var(--border); border: 1px solid var(--border2); border-radius: 4px; padding: 3px 9px; }
+
+  .body { display: grid; grid-template-columns: 1fr 360px; overflow: hidden; }
+  .main { overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+  .sidebar { border-left: 1px solid var(--border); overflow-y: auto; display: flex; flex-direction: column; }
+
+  /* ── Metrics row ── */
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .metric { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+  .metric-label { font-size: 11px; font-family: var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+  .metric-value { font-size: 28px; font-weight: 700; line-height: 1; }
+  .metric-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .metric.accent .metric-value { color: var(--accent); }
+  .metric.free-m .metric-value   { color: var(--free); }
+  .metric.occ-m .metric-value    { color: var(--occupied); }
+  .metric.res-m .metric-value    { color: var(--reserved); }
+
+  /* ── Section headers ── */
+  .sec-head { font-size: 11px; font-family: var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 14px; display: flex; align-items: center; gap: 10px; }
+  .sec-head::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  /* ── Lot map ── */
+  .lot-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .lot-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; }
+  .spot {
+    aspect-ratio: 0.65;
+    border-radius: 7px;
+    border: 1px solid var(--border2);
+    background: var(--border);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-size: 11px; font-family: var(--mono); font-weight: 500;
+    transition: transform 0.12s, border-color 0.15s, background 0.15s;
+    position: relative;
+    user-select: none;
+  }
+  .spot:hover { transform: scale(1.07); }
+  .spot.free     { background: rgba(34,201,122,0.12); border-color: rgba(34,201,122,0.4); color: var(--free); }
+  .spot.occupied { background: rgba(255,79,79,0.12);  border-color: rgba(255,79,79,0.4);  color: var(--occupied); }
+  .spot.reserved { background: rgba(240,160,32,0.12); border-color: rgba(240,160,32,0.4); color: var(--reserved); }
+  .spot.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59,139,255,0.35); }
+  .spot-car { width: 14px; height: 20px; margin-bottom: 4px; }
+  .spot-car svg { width: 100%; height: 100%; }
+  .spot-label { font-size: 10px; }
+
+  .lot-legend { display: flex; gap: 18px; margin-top: 14px; flex-wrap: wrap; }
+  .leg { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .leg-dot { width: 9px; height: 9px; border-radius: 2px; }
+
+  /* ── Camera feed ── */
+  .cam-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .cam-feed { width: 100%; aspect-ratio: 16/9; background: #000; display: flex; align-items: center; justify-content: center; position: relative; }
+  .cam-overlay { position: absolute; inset: 0; pointer-events: none; }
+  .cam-corner { position: absolute; width: 20px; height: 20px; border-color: var(--accent); border-style: solid; opacity: 0.7; }
+  .cam-corner.tl { top: 12px; left: 12px; border-width: 2px 0 0 2px; }
+  .cam-corner.tr { top: 12px; right: 12px; border-width: 2px 2px 0 0; }
+  .cam-corner.bl { bottom: 12px; left: 12px; border-width: 0 0 2px 2px; }
+  .cam-corner.br { bottom: 12px; right: 12px; border-width: 0 2px 2px 0; }
+  .cam-scan { position: absolute; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: scan 3s ease-in-out infinite; opacity: 0.7; }
+  @keyframes scan { 0%,100% { top: 10%; } 50% { top: 85%; } }
+  .cam-no-feed { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .cam-footer { padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border); }
+  .cam-plate { font-family: var(--mono); font-size: 14px; font-weight: 500; color: var(--text); background: var(--border); padding: 4px 12px; border-radius: 4px; letter-spacing: 0.1em; transition: background 0.3s, color 0.3s; }
+  .cam-plate.granted { background: rgba(34,201,122,0.2); color: var(--free); }
+  .cam-plate.denied  { background: rgba(255,79,79,0.2);  color: var(--occupied); }
+  .cam-status { font-size: 12px; font-family: var(--mono); color: var(--muted); }
+
+  /* ── Sidebar ── */
+  .sidebar-section { padding: 20px; border-bottom: 1px solid var(--border); }
+  .form-field { margin-bottom: 14px; }
+  .form-label { font-size: 11px; font-family: var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 6px; }
+  input, select {
+    width: 100%; background: var(--bg); border: 1px solid var(--border2); border-radius: 7px;
+    color: var(--text); font-family: var(--mono); font-size: 13px; padding: 9px 12px;
+    outline: none; transition: border-color 0.15s;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  .form-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .spot-preview { font-family: var(--mono); font-size: 12px; color: var(--muted); padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; margin-bottom: 14px; min-height: 36px; }
+  .spot-preview.selected { color: var(--accent); border-color: var(--accent); }
+
+  .btn { width: 100%; padding: 11px; border: none; border-radius: 8px; font-family: var(--font); font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.15s, transform 0.1s; }
+  .btn:active { transform: scale(0.98); }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { opacity: 0.9; }
+  .btn-primary:disabled { background: var(--border2); color: var(--muted); cursor: not-allowed; }
+  .btn-danger { background: rgba(255,79,79,0.15); color: var(--occupied); border: 1px solid rgba(255,79,79,0.3); }
+
+  /* ── Plate log ── */
+  .log-entry { display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-bottom: 1px solid var(--border); }
+  .log-plate { font-family: var(--mono); font-size: 13px; font-weight: 500; min-width: 90px; }
+  .log-detail { flex: 1; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .badge { font-size: 10px; font-family: var(--mono); padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+  .badge-granted { background: rgba(34,201,122,0.15); color: var(--free); }
+  .badge-denied  { background: rgba(255,79,79,0.15);  color: var(--occupied); }
+  .badge-reserved { background: rgba(240,160,32,0.15); color: var(--reserved); }
+
+  /* ── Bookings ── */
+  .booking-entry { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .bk-spot { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--reserved); min-width: 36px; }
+  .bk-detail { flex: 1; }
+  .bk-plate { font-family: var(--mono); font-size: 12px; color: var(--text); }
+  .bk-time  { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  /* ── Toast ── */
+  .toast {
+    position: fixed; bottom: 24px; right: 24px; z-index: 999;
+    background: var(--surface); border: 1px solid var(--border2); border-radius: 10px;
+    padding: 12px 18px; font-family: var(--mono); font-size: 13px;
+    opacity: 0; transform: translateY(8px); transition: opacity 0.25s, transform 0.25s;
+    pointer-events: none; max-width: 280px;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.ok   { border-left: 3px solid var(--free); }
+  .toast.err  { border-left: 3px solid var(--occupied); }
+  .toast.info { border-left: 3px solid var(--accent); }
+
+  /* ── Alert banner (gate) ── */
+  .gate-alert {
+    position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+    background: var(--surface); border: 1px solid var(--border2); border-radius: 10px;
+    padding: 14px 22px; font-family: var(--mono); font-size: 14px; font-weight: 500;
+    z-index: 998; opacity: 0; transition: opacity 0.3s; pointer-events: none; text-align: center;
+  }
+  .gate-alert.show { opacity: 1; }
+  .gate-alert.granted { border-color: rgba(34,201,122,0.6); color: var(--free); }
+  .gate-alert.denied  { border-color: rgba(255,79,79,0.6);  color: var(--occupied); }
+
+  @media (max-width: 900px) {
+    .body { grid-template-columns: 1fr; }
+    .sidebar { border-left: none; border-top: 1px solid var(--border); }
+    .lot-grid { grid-template-columns: repeat(6, 1fr); }
+    .metrics { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="topbar-logo">
+      <div class="pulse"></div>
+      ParkPi
+    </div>
+    <div class="topbar-meta">
+      <span id="clock" class="tag">--:--:--</span>
+      <span class="tag">Raspberry Pi 4</span>
+      <span class="tag" id="ws-status">connecting…</span>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <!-- ── Main area ── -->
+    <div class="main">
+
+      <!-- Metrics -->
+      <div class="metrics">
+        <div class="metric free-m">
+          <div class="metric-label">Available</div>
+          <div class="metric-value" id="m-free">—</div>
+          <div class="metric-sub">spots open</div>
+        </div>
+        <div class="metric occ-m">
+          <div class="metric-label">Occupied</div>
+          <div class="metric-value" id="m-occ">—</div>
+          <div class="metric-sub">vehicles in</div>
+        </div>
+        <div class="metric res-m">
+          <div class="metric-label">Reserved</div>
+          <div class="metric-value" id="m-res">—</div>
+          <div class="metric-sub">pre-booked</div>
+        </div>
+        <div class="metric accent">
+          <div class="metric-label">Occupancy</div>
+          <div class="metric-value" id="m-pct">—%</div>
+          <div class="metric-sub">current rate</div>
+        </div>
+      </div>
+
+      <!-- Camera feed -->
+      <div class="cam-wrap">
+        <div class="cam-feed" id="cam-feed">
+          <div class="cam-overlay">
+            <div class="cam-corner tl"></div>
+            <div class="cam-corner tr"></div>
+            <div class="cam-corner bl"></div>
+            <div class="cam-corner br"></div>
+            <div class="cam-scan"></div>
+          </div>
+          <span class="cam-no-feed">[ camera feed — connect Pi Camera or USB webcam ]</span>
+        </div>
+        <div class="cam-footer">
+          <div>
+            <div class="form-label" style="margin:0 0 4px">Last plate read</div>
+            <div class="cam-plate" id="cam-plate">— — —</div>
+          </div>
+          <div class="cam-status" id="cam-action">waiting for vehicle…</div>
+        </div>
+      </div>
+
+      <!-- Lot map -->
+      <div class="lot-wrap">
+        <div class="sec-head">Parking lot — click a free spot to reserve</div>
+        <div class="lot-grid" id="lot-grid"></div>
+        <div class="lot-legend">
+          <div class="leg"><div class="leg-dot" style="background:rgba(34,201,122,0.5)"></div>Free</div>
+          <div class="leg"><div class="leg-dot" style="background:rgba(255,79,79,0.5)"></div>Occupied</div>
+          <div class="leg"><div class="leg-dot" style="background:rgba(240,160,32,0.5)"></div>Reserved</div>
+          <div class="leg"><div class="leg-dot" style="background:rgba(59,139,255,0.5);border:1px solid var(--accent)"></div>Selected</div>
+        </div>
+      </div>
+
+      <!-- Recent plate log -->
+      <div>
+        <div class="sec-head">Gate log</div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
+          <div id="plate-log"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── Sidebar ── -->
+    <div class="sidebar">
+
+      <!-- Reserve form -->
+      <div class="sidebar-section">
+        <div class="sec-head" style="margin-bottom:16px">Reserve a spot</div>
+        <div class="spot-preview" id="spot-preview">Select a free spot on the map</div>
+        <div class="form-field">
+          <div class="form-label">Plate number</div>
+          <input id="f-plate" type="text" placeholder="e.g. MAR-12-AB" maxlength="12">
+        </div>
+        <div class="form-field">
+          <div class="form-label">Date</div>
+          <input id="f-date" type="date">
+        </div>
+        <div class="form-row2 form-field">
+          <div>
+            <div class="form-label">From</div>
+            <input id="f-from" type="time" value="08:00">
+          </div>
+          <div>
+            <div class="form-label">To</div>
+            <input id="f-to" type="time" value="10:00">
+          </div>
+        </div>
+        <button class="btn btn-primary" id="btn-reserve" disabled>Select a spot first</button>
+      </div>
+
+      <!-- Current bookings -->
+      <div class="sidebar-section" style="flex:1">
+        <div class="sec-head" style="margin-bottom:12px">Active reservations</div>
+        <div id="bookings-list"></div>
+      </div>
+
+      <!-- Barrier manual control -->
+      <div class="sidebar-section">
+        <div class="sec-head" style="margin-bottom:12px">Manual gate control</div>
+        <button class="btn btn-danger" id="btn-barrier" onclick="openBarrier()">Open barrier (5s)</button>
+        <div style="font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:8px;">
+          For manual vehicle override. Plate recognition opens gate automatically.
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Alerts -->
+<div class="toast" id="toast"></div>
+<div class="gate-alert" id="gate-alert"></div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+const TOTAL_SPOTS = 12;
+const ROW_SIZE    = 4;
+let spotStates = {};
+let selectedSpot = null;
+let ws;
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('ws-status').textContent = 'live';
+  };
+
+  ws.onclose = () => {
+    document.getElementById('ws-status').textContent = 'reconnecting…';
+    setTimeout(connectWS, 3000);
+  };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'snapshot') {
+      spotStates = msg.states;
+      renderGrid();
+      updateMetrics();
+    }
+
+    if (msg.type === 'state_update') {
+      for (const [id, status] of msg.changes) {
+        spotStates[id] = status;
+      }
+      renderGrid();
+      updateMetrics();
+    }
+
+    if (msg.type === 'plate_detected') {
+      handlePlateDetected(msg);
+    }
+  };
+}
+
+// ── Plate detection ────────────────────────────────────────────────────────────
+function handlePlateDetected(msg) {
+  const plate = msg.plate;
+  const ok    = msg.action === 'granted';
+
+  const el = document.getElementById('cam-plate');
+  el.textContent = plate;
+  el.className = 'cam-plate ' + msg.action;
+
+  document.getElementById('cam-action').textContent =
+    ok ? `Access granted → spot ${msg.spot_id}` : 'Access denied — no reservation';
+
+  const alert = document.getElementById('gate-alert');
+  alert.textContent = ok
+    ? `✓ ${plate} — gate open → ${msg.spot_id}`
+    : `✗ ${plate} — no reservation found`;
+  alert.className = 'gate-alert show ' + msg.action;
+  setTimeout(() => {
+    alert.className = 'gate-alert';
+    el.className = 'cam-plate';
+  }, 5000);
+
+  // Refresh plate log
+  loadPlateLog();
+}
+
+// ── Grid rendering ─────────────────────────────────────────────────────────────
+function spotLabel(i) {
+  const row = String.fromCharCode(65 + Math.floor(i / ROW_SIZE));
+  const col = (i % ROW_SIZE) + 1;
+  return row + col;
+}
+
+function carSVG(color) {
+  return `<svg viewBox="0 0 20 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect x="2" y="10" width="16" height="14" rx="3" fill="${color}" opacity="0.8"/>
+    <path d="M4 10L6 4H14L16 10" fill="${color}" opacity="0.6"/>
+    <rect x="3" y="21" width="4" height="4" rx="2" fill="#111" opacity="0.8"/>
+    <rect x="13" y="21" width="4" height="4" rx="2" fill="#111" opacity="0.8"/>
+    <rect x="4" y="12" width="4" height="4" rx="1" fill="#fff" opacity="0.25"/>
+    <rect x="12" y="12" width="4" height="4" rx="1" fill="#fff" opacity="0.25"/>
+  </svg>`;
+}
+
+function renderGrid() {
+  const grid = document.getElementById('lot-grid');
+  const ids  = Object.keys(spotStates);
+  grid.innerHTML = '';
+
+  ids.forEach((id, i) => {
+    const st  = spotStates[id] || 'free';
+    const sel = selectedSpot === id;
+    const div = document.createElement('div');
+    div.className = `spot ${st}${sel ? ' selected' : ''}`;
+    div.title = `${id} — ${st}`;
+
+    const color = st === 'free' ? '#22c97a' : st === 'occupied' ? '#ff4f4f' : '#f0a020';
+    div.innerHTML = `
+      <div class="spot-car">${carSVG(color)}</div>
+      <div class="spot-label">${id}</div>`;
+
+    if (st === 'free') {
+      div.onclick = () => selectSpot(id);
+    }
+    grid.appendChild(div);
+  });
+}
+
+function selectSpot(id) {
+  selectedSpot = id;
+  document.getElementById('spot-preview').textContent = `Spot ${id} selected`;
+  document.getElementById('spot-preview').className = 'spot-preview selected';
+  document.getElementById('btn-reserve').disabled = false;
+  document.getElementById('btn-reserve').textContent = `Reserve spot ${id}`;
+  renderGrid();
+}
+
+// ── Metrics ───────────────────────────────────────────────────────────────────
+function updateMetrics() {
+  const vals = Object.values(spotStates);
+  const free = vals.filter(s => s === 'free').length;
+  const occ  = vals.filter(s => s === 'occupied').length;
+  const res  = vals.filter(s => s === 'reserved').length;
+  const tot  = vals.length || 1;
+  document.getElementById('m-free').textContent = free;
+  document.getElementById('m-occ').textContent  = occ;
+  document.getElementById('m-res').textContent  = res;
+  document.getElementById('m-pct').textContent  = Math.round((occ + res) / tot * 100) + '%';
+}
+
+// ── Reserve ────────────────────────────────────────────────────────────────────
+document.getElementById('btn-reserve').onclick = async () => {
+  const plate  = document.getElementById('f-plate').value.trim().toUpperCase();
+  const date   = document.getElementById('f-date').value;
+  const from   = document.getElementById('f-from').value;
+  const to     = document.getElementById('f-to').value;
+  if (!plate)         return toast('Enter a plate number', 'err');
+  if (!selectedSpot)  return toast('Select a spot first', 'err');
+
+  try {
+    const r = await fetch('/api/reserve', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({spot_id: selectedSpot, plate, date, time_from: from, time_to: to})
+    });
+    const data = await r.json();
+    if (!r.ok) return toast(data.error || 'Error', 'err');
+    toast(`Spot ${selectedSpot} reserved for ${plate}`, 'ok');
+    selectedSpot = null;
+    document.getElementById('spot-preview').textContent = 'Select a free spot on the map';
+    document.getElementById('spot-preview').className = 'spot-preview';
+    document.getElementById('btn-reserve').disabled = true;
+    document.getElementById('btn-reserve').textContent = 'Select a spot first';
+    document.getElementById('f-plate').value = '';
+    loadBookings();
+  } catch {
+    toast('Network error', 'err');
+  }
+};
+
+// ── Plate log ──────────────────────────────────────────────────────────────────
+async function loadPlateLog() {
+  try {
+    const r = await fetch('/api/plate-log');
+    const rows = await r.json();
+    const el = document.getElementById('plate-log');
+    if (!rows.length) { el.innerHTML = '<div style="padding:14px 20px;font-size:12px;color:var(--muted);font-family:var(--mono)">No gate events yet</div>'; return; }
+    el.innerHTML = rows.slice(0, 8).map(r => {
+      const t = new Date(r.ts).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+      return `<div class="log-entry">
+        <div class="log-plate">${r.plate}</div>
+        <div class="log-detail">${r.spot_id ? `→ ${r.spot_id}` : 'no spot'} · ${t}</div>
+        <div class="badge badge-${r.action}">${r.action}</div>
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+// ── Bookings ───────────────────────────────────────────────────────────────────
+async function loadBookings() {
+  try {
+    const r = await fetch('/api/reservations');
+    const rows = await r.json();
+    const active = rows.filter(r => r.status === 'active').slice(0, 8);
+    const el = document.getElementById('bookings-list');
+    if (!active.length) {
+      el.innerHTML = '<div style="font-size:12px;color:var(--muted);font-family:var(--mono)">No active reservations</div>';
+      return;
+    }
+    el.innerHTML = active.map(r => `
+      <div class="booking-entry">
+        <div class="bk-spot">${r.spot_id}</div>
+        <div class="bk-detail">
+          <div class="bk-plate">${r.plate}</div>
+          <div class="bk-time">${r.date} · ${r.time_from}–${r.time_to}</div>
+        </div>
+        <button onclick="cancelReservation('${r.spot_id}')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:4px 8px;" title="Cancel">×</button>
+      </div>`).join('');
+  } catch {}
+}
+
+async function cancelReservation(spotId) {
+  if (!confirm(`Cancel reservation for spot ${spotId}?`)) return;
+  await fetch(`/api/reserve/${spotId}`, {method: 'DELETE'});
+  toast(`Reservation for ${spotId} cancelled`, 'info');
+  loadBookings();
+}
+
+// ── Barrier ────────────────────────────────────────────────────────────────────
+async function openBarrier() {
+  await fetch('/api/barrier/open', {method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}'});
+  toast('Gate opened for 5s', 'info');
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast show ${type}`;
+  setTimeout(() => t.className = 'toast', 3500);
+}
+
+// ── Clock ─────────────────────────────────────────────────────────────────────
+function updateClock() {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('en-GB');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+const today = new Date().toISOString().split('T')[0];
+document.getElementById('f-date').value = today;
+document.getElementById('f-date').min   = today;
+
+connectWS();
+updateClock();
+setInterval(updateClock, 1000);
+loadPlateLog();
+loadBookings();
+setInterval(loadBookings, 30000);
+</script>
+</body>
+</html>

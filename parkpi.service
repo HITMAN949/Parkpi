@@ -1,0 +1,22 @@
+[Unit]
+Description=ParkPi Smart Parking System
+After=network.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/parkpi
+ExecStart=/usr/bin/python3 /home/pi/parkpi/app.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
+# ── Install instructions ──────────────────────────────────────
+# sudo cp parkpi.service /etc/systemd/system/
+# sudo systemctl daemon-reload
+# sudo systemctl enable parkpi
+# sudo systemctl start parkpi
+# sudo journalctl -u parkpi -f    ← view live logs
